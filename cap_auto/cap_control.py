@@ -23,6 +23,15 @@ from datetime import datetime
 from warnings import warn
 from glob import glob as glob_func
 
+try:
+    from watchdog.observers import Observer
+    from watchdog.events import FileSystemEventHandler
+    WATCHDOG_AVAILABLE = True
+except ImportError:
+    WATCHDOG_AVAILABLE = False
+    Observer = None
+    FileSystemEventHandler = object
+
 # ============================================================================
 # Exception Classes
 # ============================================================================
@@ -50,6 +59,92 @@ class CAPCommandError(ValueError):
 class CAPRuntimeError(RuntimeError):
     """Raised when a CAP runtime issue occurs."""
     pass
+
+
+# ============================================================================
+# Event Handler for Listen Mode (Watchdog Integration)
+# ============================================================================
+
+class ListenModeEventHandler(FileSystemEventHandler):
+    """File system event handler for CAP listen mode status files.
+    
+    This handler monitors the listen mode folder for status file changes and
+    uses threading.Event objects to signal state transitions, eliminating the
+    need for polling loops.
+    
+    Status files monitored:
+        - command.busy: Created when CAP picks up a command
+        - command.done: Created when command completes successfully
+        - command.error: Created when command fails
+    
+    Events signaled:
+        - command_picked_up: Set when command.busy is created
+        - command_completed: Set when command.busy is deleted
+        - status_finalized: Set when command.done or command.error is created
+    """
+    
+    def __init__(self, cmd_folder: str):
+        super().__init__()
+        self.cmd_folder = cmd_folder
+        
+        # Threading events for state transitions
+        self.command_picked_up = threading.Event()
+        self.command_completed = threading.Event()
+        self.status_finalized = threading.Event()
+        
+        # Status tracking (thread-safe)
+        self._status_lock = threading.Lock()
+        self.current_status = 'idle'
+        self.final_status: Optional[str] = None
+        
+    def on_created(self, event):
+        """Handle file creation events."""
+        if event.is_directory:
+            return
+        
+        filename = os.path.basename(event.src_path)
+        
+        if filename == 'command.busy':
+            with self._status_lock:
+                self.current_status = 'busy'
+            self.command_picked_up.set()
+        
+        elif filename == 'command.done':
+            with self._status_lock:
+                self.current_status = 'idle'
+                self.final_status = 'done'
+            self.status_finalized.set()
+        
+        elif filename == 'command.error':
+            with self._status_lock:
+                self.current_status = 'error'
+                self.final_status = 'error'
+            self.status_finalized.set()
+    
+    def on_deleted(self, event):
+        """Handle file deletion events."""
+        if event.is_directory:
+            return
+        
+        filename = os.path.basename(event.src_path)
+        
+        if filename == 'command.busy':
+            # Busy file deleted - command is completing
+            self.command_completed.set()
+    
+    def get_status(self) -> str:
+        """Get current status (thread-safe)."""
+        with self._status_lock:
+            return self.current_status
+    
+    def reset(self):
+        """Reset events for next command execution."""
+        self.command_picked_up.clear()
+        self.command_completed.clear()
+        self.status_finalized.clear()
+        with self._status_lock:
+            self.final_status = None
+            # Don't reset current_status - it reflects actual state
 
 
 # ============================================================================
@@ -211,8 +306,20 @@ class CAPInstance:
         self._socket_running = False
         self._socket_port: Optional[int] = None
         
+        # Watchdog file system observer (event-driven status monitoring)
+        self._observer: Optional[Observer] = None
+        self._event_handler: Optional[ListenModeEventHandler] = None
+        self._use_watchdog = WATCHDOG_AVAILABLE
+        
         # Setup
         os.makedirs(cmd_folder, exist_ok=True)
+        
+        # Start watchdog observer if available
+        if self._use_watchdog:
+            self._event_handler = ListenModeEventHandler(cmd_folder)
+            self._observer = Observer()
+            self._observer.schedule(self._event_handler, cmd_folder, recursive=False)
+            self._observer.start()
         
         # Try to stop any existing listen mode in this folder
         try:
@@ -246,6 +353,14 @@ class CAPInstance:
             self.stop(allow_stopped=True)
         except:
             pass
+        
+        # Stop watchdog observer
+        if self._observer:
+            try:
+                self._observer.stop()
+                self._observer.join(timeout=1)
+            except:
+                pass
     
     # ========================================================================
     # Properties
@@ -256,13 +371,21 @@ class CAPInstance:
         return (self.cap_proc is not None) and (self.cap_proc.poll() is None)
     
     def get_status(self) -> str:
-        """Get current listen mode status: 'idle', 'busy', or 'error'."""
-        if os.path.exists(self._command_file_path('busy')):
-            return 'busy'
-        elif os.path.exists(self._command_file_path('error')):
-            return 'error'
+        """Get current listen mode status: 'idle', 'busy', or 'error'.
+        
+        Uses event handler if watchdog is available, otherwise falls back to
+        polling filesystem.
+        """
+        if self._use_watchdog and self._event_handler:
+            return self._event_handler.get_status()
         else:
-            return 'idle'
+            # Fallback to filesystem polling
+            if os.path.exists(self._command_file_path('busy')):
+                return 'busy'
+            elif os.path.exists(self._command_file_path('error')):
+                return 'error'
+            else:
+                return 'idle'
     
     # ========================================================================
     # Lifecycle Methods
@@ -380,6 +503,9 @@ class CAPInstance:
         is sent to CAP via listen mode, and the result including log output
         is captured and returned.
         
+        Uses event-driven file monitoring (watchdog) when available for instant
+        response. Falls back to polling if watchdog is not installed.
+        
         Args:
             cmd: CAP command string (e.g., "dc proffit", "gt o 90")
             timeout: Maximum seconds to wait for command (None = no timeout)
@@ -414,30 +540,68 @@ class CAPInstance:
         # Record log position before command
         log_start_pos = self._get_log_position()
         
+        # Reset event handler for this command (if using watchdog)
+        if self._use_watchdog and self._event_handler:
+            self._event_handler.reset()
+        
         # Write and send command
         self._write_command(cmd)
         
-        # Wait for CAP to pick up command
-        t0 = time.time()
-        while self.get_status() != 'busy':
-            if (time.time() - t0) > self.start_timeout:
+        # Wait for CAP to pick up command (event-driven or polling)
+        if self._use_watchdog and self._event_handler:
+            # Event-driven: wait for command_picked_up event
+            if not self._event_handler.command_picked_up.wait(timeout=self.start_timeout):
                 raise CAPListenModeError(
-                    f'CAP did not pick up command. Check listen mode is active.')
-            time.sleep(0.01)
+                    f'CAP did not pick up command within {self.start_timeout}s. Check listen mode is active.')
+        else:
+            # Fallback: polling
+            t0 = time.time()
+            while self.get_status() != 'busy':
+                if (time.time() - t0) > self.start_timeout:
+                    raise CAPListenModeError(
+                        f'CAP did not pick up command. Check listen mode is active.')
+                time.sleep(0.01)
         
-        # Wait for command to complete
-        t0 = time.time()
-        while self.get_status() == 'busy':
-            if timeout and ((time.time() - t0) > timeout):
+        # Wait for command to complete (event-driven or polling)
+        if self._use_watchdog and self._event_handler:
+            # Event-driven: wait for command_completed event
+            if timeout:
+                elapsed = time.time() - start_time
+                remaining_timeout = timeout - elapsed
+                if remaining_timeout <= 0:
+                    raise CAPListenModeError(f'Command timed out before completion: {cmd}')
+            else:
+                remaining_timeout = None
+            
+            if not self._event_handler.command_completed.wait(timeout=remaining_timeout):
                 # Timeout - send stop signal
-                with open(self._command_file_path('stop'), 'w') as fh:
-                    fh.write('')
+                try:
+                    with open(self._command_file_path('stop'), 'w') as fh:
+                        fh.write('')
+                except:
+                    pass
                 raise CAPListenModeError(f'Command timed out after {timeout}s: {cmd}')
-            time.sleep(0.01)
+        else:
+            # Fallback: polling
+            t0 = time.time()
+            while self.get_status() == 'busy':
+                if timeout and ((time.time() - t0) > timeout):
+                    # Timeout - send stop signal
+                    with open(self._command_file_path('stop'), 'w') as fh:
+                        fh.write('')
+                    raise CAPListenModeError(f'Command timed out after {timeout}s: {cmd}')
+                time.sleep(0.01)
         
-        # Wait for final status file
-        while self.get_status() not in ['idle', 'error']:
-            time.sleep(0.01)
+        # Wait for final status file (event-driven or polling)
+        if self._use_watchdog and self._event_handler:
+            # Event-driven: wait for status_finalized event
+            if not self._event_handler.status_finalized.wait(timeout=2.0):
+                # Fallback to checking filesystem if event doesn't arrive
+                self._message_func('Warning: Status finalization event timeout, checking filesystem')
+        else:
+            # Fallback: polling
+            while self.get_status() not in ['idle', 'error']:
+                time.sleep(0.01)
         
         # Process result
         success = True
