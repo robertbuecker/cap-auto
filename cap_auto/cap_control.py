@@ -281,7 +281,7 @@ class CAPInstance:
             raise CAPListenModeError('CAP instance is already running')
         
         # Launch CAP in listen mode
-        cmd = f'"{os.path.join(self.cap_folder, "pro.exe")}" "{self.par_file}" -listenmode "{self.cmd_folder}"'
+        cmd = f'"{os.path.join(self.cap_folder, "pro.exe")}" "{self.par_file}" -listenmode "{self.cmd_folder}" '
         self.cap_proc = subprocess.Popen(cmd, shell=True)
         
         # Wait for CAP to be ready
@@ -327,11 +327,6 @@ class CAPInstance:
             self.cap_proc.wait(timeout=5)
         except:
             self.cap_proc.kill()
-        
-        self.cap_proc = None
-        if self._log_handle:
-            self._log_handle.close()
-            self._log_handle = None
         
         self._message_func('CAP stopped')
     
@@ -950,6 +945,95 @@ class CAPInstance:
                     return cmd
         return None
 
+class CAPInstanceOnline(CAPInstance):
+    """CAPInstance subclass with online instrument operation. Instead of launching CAP, it connects
+    to an existing CAP instance controlling the instrument.
+    """
+    
+    def __init__(self, cmd_folder: str = 'C:\\Xcalibur\\tmp\\listen_mode', start_now=False, **kwargs):
+        
+        # Override start to not launch CAP but to attach to existing instance
+        self.start = self._attach_online
+        self.stop = self._detach_online
+        self._is_running_online = False # we need to track this separately as we do not own the CAP process
+        self.cap_folder = None # unknown
+        self.cap_version = None # unknown
+        super().__init__(cmd_folder=cmd_folder, start_now=start_now, **kwargs)
+        
+    def is_running(self) -> bool:
+        # overloading to track online status
+        return self._is_running_online
+
+    def _attach_online(self, timeout: float = 20):
+        """Attach to existing CAP instance in listen mode."""
+        if self.is_running():
+            raise CAPListenModeError('CAP instance is already running')
+        
+        # Wait for CAP to be ready
+        t0 = time.time()
+        self._is_running_online = True # required here to avoid infinite recursion in `execute`
+        
+        while True:
+            try:
+                result = self.execute('xx sleep 1', timeout=0.5, raise_on_error=False)
+                if result.success:
+                    self._update_log_file()
+                    self._message_func(f'Attached to online CAP instance.')
+                    break
+            except CAPListenModeError:
+                pass
+            
+            if time.time() > (t0 + timeout):
+                self._is_running_online = False
+                raise CAPListenModeError(
+                    f'CAP not responding after {timeout}s. Ensure CAP is running in listen mode.')
+            time.sleep(0.1)
+        
+    def _detach_online(self, allow_stopped: bool = False):
+        """Detach from online CAP instance."""
+        if not self.is_running():
+            if not allow_stopped:
+                raise CAPListenModeError('No CAP instance running')
+            return
+        
+        try:
+            self.execute('xx listenmode off', timeout=1, raise_on_error=False)
+        except:
+            pass
+        
+        self._is_running_online = False
+        self._message_func('Detached from online CAP instance.')
+
+    def _update_log_file(self):
+        """Update the log file path and version information for online CAP from global log folder"""
+        import locale
+        saved = locale.setlocale(locale.LC_ALL)
+        try:
+            locale.setlocale(locale.LC_ALL, 'C')
+            log_dir = os.path.join('C:\\Xcalibur\\log')
+            
+            if not os.path.exists(log_dir):
+                os.makedirs(log_dir, exist_ok=True)
+                return
+            
+            log_files = glob_func(os.path.join(log_dir, 'crysalispro_ccdLOG*.txt'))
+            if not log_files:
+                return
+            
+            latest_log = sorted(log_files, key=os.path.getmtime, reverse=True)[0]
+            
+            if self.log_file != latest_log:
+                # New log file
+                if self._log_handle:
+                    self._log_handle.close()
+                self.log_file = latest_log
+                self.log_position = 0
+                self._log_handle = None
+                
+        except Exception as e:
+            self._message_func(f'Warning: Cannot access log file: {e}')
+        finally:
+            locale.setlocale(locale.LC_ALL, saved)
 
 # ============================================================================
 # Backward Compatibility (Deprecated)
