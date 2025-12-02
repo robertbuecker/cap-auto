@@ -24,13 +24,13 @@ from warnings import warn
 from glob import glob as glob_func
 
 try:
-    from watchdog.observers import Observer
-    from watchdog.events import FileSystemEventHandler
-    WATCHDOG_AVAILABLE = True
+    import win32file
+    import win32con
+    PYWIN32_AVAILABLE = True
 except ImportError:
-    WATCHDOG_AVAILABLE = False
-    Observer = None
-    FileSystemEventHandler = object
+    PYWIN32_AVAILABLE = False
+    win32file = None
+    win32con = None
 
 # ============================================================================
 # Exception Classes
@@ -62,15 +62,17 @@ class CAPRuntimeError(RuntimeError):
 
 
 # ============================================================================
-# Event Handler for Listen Mode (Watchdog Integration)
+# Windows Native File Monitor (using ReadDirectoryChangesW)
 # ============================================================================
 
-class ListenModeEventHandler(FileSystemEventHandler):
-    """File system event handler for CAP listen mode status files.
+class WindowsDirectoryMonitor:
+    """Native Windows file system monitor using ReadDirectoryChangesW.
     
-    This handler monitors the listen mode folder for status file changes and
-    uses threading.Event objects to signal state transitions, eliminating the
-    need for polling loops.
+    This monitors the listen mode folder for file changes using the Windows API
+    directly via pywin32. It runs in a background thread and signals events when
+    status files are created or deleted.
+    
+    Based on: https://timgolden.me.uk/python/win32_how_do_i/watch_directory_for_changes.html
     
     Status files monitored:
         - command.busy: Created when CAP picks up a command
@@ -83,8 +85,10 @@ class ListenModeEventHandler(FileSystemEventHandler):
         - status_finalized: Set when command.done or command.error is created
     """
     
+    # Windows file change notification flags
+    FILE_LIST_DIRECTORY = 0x0001
+    
     def __init__(self, cmd_folder: str):
-        super().__init__()
         self.cmd_folder = cmd_folder
         
         # Threading events for state transitions
@@ -97,40 +101,114 @@ class ListenModeEventHandler(FileSystemEventHandler):
         self.current_status = 'idle'
         self.final_status: Optional[str] = None
         
-    def on_created(self, event):
-        """Handle file creation events."""
-        if event.is_directory:
-            return
-        
-        filename = os.path.basename(event.src_path)
-        
-        if filename == 'command.busy':
-            with self._status_lock:
-                self.current_status = 'busy'
-            self.command_picked_up.set()
-        
-        elif filename == 'command.done':
-            with self._status_lock:
-                self.current_status = 'idle'
-                self.final_status = 'done'
-            self.status_finalized.set()
-        
-        elif filename == 'command.error':
-            with self._status_lock:
-                self.current_status = 'error'
-                self.final_status = 'error'
-            self.status_finalized.set()
+        # Thread control
+        self._running = False
+        self._thread: Optional[threading.Thread] = None
+        self._dir_handle = None
     
-    def on_deleted(self, event):
-        """Handle file deletion events."""
-        if event.is_directory:
+    def start(self):
+        """Start monitoring thread."""
+        if self._running:
             return
         
-        filename = os.path.basename(event.src_path)
+        self._running = True
+        self._thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self._thread.start()
+    
+    def stop(self):
+        """Stop monitoring thread."""
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=2)
+            self._thread = None
+    
+    def _monitor_loop(self):
+        """Background thread that monitors directory changes."""
+        try:
+            # Open directory handle for monitoring
+            # FILE_FLAG_BACKUP_SEMANTICS is required for directories
+            self._dir_handle = win32file.CreateFile(
+                self.cmd_folder,
+                self.FILE_LIST_DIRECTORY,
+                win32con.FILE_SHARE_READ | win32con.FILE_SHARE_WRITE | win32con.FILE_SHARE_DELETE,
+                None,
+                win32con.OPEN_EXISTING,
+                win32con.FILE_FLAG_BACKUP_SEMANTICS,
+                None
+            )
+            
+            # Monitor loop
+            while self._running:
+                try:
+                    # ReadDirectoryChangesW blocks until changes occur
+                    # We use a short timeout by checking _running flag
+                    results = win32file.ReadDirectoryChangesW(
+                        self._dir_handle,
+                        1024,  # Buffer size
+                        False,  # Don't watch subdirectories
+                        win32con.FILE_NOTIFY_CHANGE_FILE_NAME | win32con.FILE_NOTIFY_CHANGE_LAST_WRITE,
+                        None,
+                        None
+                    )
+                    
+                    # Process changes
+                    for action, filename in results:
+                        self._handle_change(action, filename)
+                
+                except Exception as e:
+                    if self._running:
+                        # Only report errors if we're still supposed to be running
+                        import traceback
+                        traceback.print_exc()
+                    break
         
-        if filename == 'command.busy':
-            # Busy file deleted - command is completing
-            self.command_completed.set()
+        finally:
+            # Close directory handle
+            if self._dir_handle:
+                try:
+                    win32file.CloseHandle(self._dir_handle)
+                except:
+                    pass
+                self._dir_handle = None
+    
+    def _handle_change(self, action: int, filename: str):
+        """Handle a file change notification.
+        
+        Args:
+            action: Windows FILE_ACTION_* constant
+            filename: Name of file that changed
+        """
+        # FILE_ACTION constants
+        FILE_ACTION_ADDED = 1
+        FILE_ACTION_REMOVED = 2
+        FILE_ACTION_MODIFIED = 3
+        FILE_ACTION_RENAMED_OLD_NAME = 4
+        FILE_ACTION_RENAMED_NEW_NAME = 5
+        
+        if action == FILE_ACTION_ADDED or action == FILE_ACTION_RENAMED_NEW_NAME:
+            # File created
+            if filename == 'command.busy':
+                with self._status_lock:
+                    self.current_status = 'busy'
+                self.command_picked_up.set()
+            
+            elif filename == 'command.done':
+                with self._status_lock:
+                    self.current_status = 'idle'
+                    self.final_status = 'done'
+                self.status_finalized.set()
+            
+            elif filename == 'command.error':
+                with self._status_lock:
+                    self.current_status = 'error'
+                    self.final_status = 'error'
+                self.status_finalized.set()
+        
+        elif action == FILE_ACTION_REMOVED or action == FILE_ACTION_RENAMED_OLD_NAME:
+            # File deleted
+            if filename == 'command.busy':
+                # Busy file deleted - command is completing
+                self.command_completed.set()
     
     def get_status(self) -> str:
         """Get current status (thread-safe)."""
@@ -306,20 +384,17 @@ class CAPInstance:
         self._socket_running = False
         self._socket_port: Optional[int] = None
         
-        # Watchdog file system observer (event-driven status monitoring)
-        self._observer: Optional[Observer] = None
-        self._event_handler: Optional[ListenModeEventHandler] = None
-        self._use_watchdog = WATCHDOG_AVAILABLE
+        # Windows native file system monitor (event-driven status monitoring)
+        self._monitor: Optional[WindowsDirectoryMonitor] = None
+        self._use_native_monitor = PYWIN32_AVAILABLE
         
         # Setup
         os.makedirs(cmd_folder, exist_ok=True)
         
-        # Start watchdog observer if available
-        if self._use_watchdog:
-            self._event_handler = ListenModeEventHandler(cmd_folder)
-            self._observer = Observer()
-            self._observer.schedule(self._event_handler, cmd_folder, recursive=False)
-            self._observer.start()
+        # Start Windows directory monitor if available
+        if self._use_native_monitor:
+            self._monitor = WindowsDirectoryMonitor(cmd_folder)
+            self._monitor.start()
         
         # Try to stop any existing listen mode in this folder
         try:
@@ -354,11 +429,10 @@ class CAPInstance:
         except:
             pass
         
-        # Stop watchdog observer
-        if self._observer:
+        # Stop directory monitor
+        if self._monitor:
             try:
-                self._observer.stop()
-                self._observer.join(timeout=1)
+                self._monitor.stop()
             except:
                 pass
     
@@ -373,11 +447,11 @@ class CAPInstance:
     def get_status(self) -> str:
         """Get current listen mode status: 'idle', 'busy', or 'error'.
         
-        Uses event handler if watchdog is available, otherwise falls back to
+        Uses native Windows monitor if available, otherwise falls back to
         polling filesystem.
         """
-        if self._use_watchdog and self._event_handler:
-            return self._event_handler.get_status()
+        if self._use_native_monitor and self._monitor:
+            return self._monitor.get_status()
         else:
             # Fallback to filesystem polling
             if os.path.exists(self._command_file_path('busy')):
@@ -503,8 +577,8 @@ class CAPInstance:
         is sent to CAP via listen mode, and the result including log output
         is captured and returned.
         
-        Uses event-driven file monitoring (watchdog) when available for instant
-        response. Falls back to polling if watchdog is not installed.
+        Uses event-driven file monitoring (via pywin32) when available for instant
+        response. Falls back to polling if pywin32 is not installed.
         
         Args:
             cmd: CAP command string (e.g., "dc proffit", "gt o 90")
@@ -540,31 +614,23 @@ class CAPInstance:
         # Record log position before command
         log_start_pos = self._get_log_position()
         
-        # Reset event handler for this command (if using watchdog)
-        if self._use_watchdog and self._event_handler:
-            self._event_handler.reset()
+        # Reset monitor for this command (if using native monitor)
+        if self._use_native_monitor and self._monitor:
+            self._monitor.reset()
         
         # Write and send command
         self._write_command(cmd)
         
-        # Wait for CAP to pick up command (event-driven or polling)
-        if self._use_watchdog and self._event_handler:
-            # Event-driven: wait for command_picked_up event
-            if not self._event_handler.command_picked_up.wait(timeout=self.start_timeout):
+        # Wait for command execution (event-driven or polling)
+        if self._use_native_monitor and self._monitor:
+            # === Event-driven monitoring (using pywin32 ReadDirectoryChangesW) ===
+            
+            # Wait for CAP to pick up command
+            if not self._monitor.command_picked_up.wait(timeout=self.start_timeout):
                 raise CAPListenModeError(
                     f'CAP did not pick up command within {self.start_timeout}s. Check listen mode is active.')
-        else:
-            # Fallback: polling
-            t0 = time.time()
-            while self.get_status() != 'busy':
-                if (time.time() - t0) > self.start_timeout:
-                    raise CAPListenModeError(
-                        f'CAP did not pick up command. Check listen mode is active.')
-                time.sleep(0.01)
-        
-        # Wait for command to complete (event-driven or polling)
-        if self._use_watchdog and self._event_handler:
-            # Event-driven: wait for command_completed event
+            
+            # Wait for command to complete
             if timeout:
                 elapsed = time.time() - start_time
                 remaining_timeout = timeout - elapsed
@@ -573,7 +639,7 @@ class CAPInstance:
             else:
                 remaining_timeout = None
             
-            if not self._event_handler.command_completed.wait(timeout=remaining_timeout):
+            if not self._monitor.command_completed.wait(timeout=remaining_timeout):
                 # Timeout - send stop signal
                 try:
                     with open(self._command_file_path('stop'), 'w') as fh:
@@ -581,8 +647,24 @@ class CAPInstance:
                 except:
                     pass
                 raise CAPListenModeError(f'Command timed out after {timeout}s: {cmd}')
+            
+            # Wait for final status file
+            if not self._monitor.status_finalized.wait(timeout=2.0):
+                # Fallback to checking filesystem if event doesn't arrive
+                self._message_func('Warning: Status finalization event timeout, checking filesystem')
+        
         else:
-            # Fallback: polling
+            # === Fallback: polling filesystem ===
+            
+            # Wait for CAP to pick up command
+            t0 = time.time()
+            while self.get_status() != 'busy':
+                if (time.time() - t0) > self.start_timeout:
+                    raise CAPListenModeError(
+                        f'CAP did not pick up command. Check listen mode is active.')
+                time.sleep(0.01)
+            
+            # Wait for command to complete
             t0 = time.time()
             while self.get_status() == 'busy':
                 if timeout and ((time.time() - t0) > timeout):
@@ -591,15 +673,8 @@ class CAPInstance:
                         fh.write('')
                     raise CAPListenModeError(f'Command timed out after {timeout}s: {cmd}')
                 time.sleep(0.01)
-        
-        # Wait for final status file (event-driven or polling)
-        if self._use_watchdog and self._event_handler:
-            # Event-driven: wait for status_finalized event
-            if not self._event_handler.status_finalized.wait(timeout=2.0):
-                # Fallback to checking filesystem if event doesn't arrive
-                self._message_func('Warning: Status finalization event timeout, checking filesystem')
-        else:
-            # Fallback: polling
+            
+            # Wait for final status file
             while self.get_status() not in ['idle', 'error']:
                 time.sleep(0.01)
         

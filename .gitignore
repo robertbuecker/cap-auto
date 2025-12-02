@@ -1,3 +1,6 @@
 cap_docs
 *.pyc
 play_*.ipynb
+doc_internal
+__pycache__
+tests
