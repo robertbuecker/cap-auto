@@ -479,7 +479,7 @@ class CAPInstance:
         
         # Launch CAP in listen mode
         cmd = f'"{os.path.join(self.cap_folder, "pro.exe")}" "{self.par_file}" -listenmode "{self.cmd_folder}" '
-        self.cap_proc = subprocess.Popen(cmd, shell=True)
+        self.cap_proc = subprocess.Popen(cmd)
         
         # Wait for CAP to be ready
         t0 = time.time()
