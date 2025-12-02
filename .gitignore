@@ -4,3 +4,5 @@ play_*.ipynb
 doc_internal
 __pycache__
 tests
+example_data/*
+!example_data/*.zip

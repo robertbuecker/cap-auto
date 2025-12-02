@@ -155,20 +155,6 @@ cap.execute("gt d 50")           # Distance
 cap.execute("gt a 0 0 0 0")      # All axes
 ```
 
-### Experiment
-```python
-cap.execute('xx selectexpnogui "path/exp.par"')
-cap.execute("xx saveub")
-cap.execute("xx recallub")
-```
-
-### System
-```python
-cap.execute("xx sleep 5")
-cap.execute("xx listenmode on folder")
-cap.execute("xx listenmode off")
-```
-
 ### Video
 ```python
 cap.execute("dc sfs")                # Start video
@@ -208,18 +194,3 @@ results = cap.execute_batch(
 )
 ```
 
-## Files Created
-
-- `cap_control_refactored.py` - Main implementation
-- `examples.py` - 7 working examples
-- `README_REFACTORED.md` - Full documentation
-- `MIGRATION.md` - Migration guide
-- `REFACTORING_SUMMARY.md` - Overview
-- `QUICKREF.md` - This file
-
-## Need Help?
-
-1. Check `README_REFACTORED.md` for detailed API docs
-2. Run `examples.py` for working demonstrations  
-3. See `MIGRATION.md` if migrating from old code
-4. Review CAP docs: `cap_docs/helpfile/EReferenceSection_Issues_ITS_144.html`

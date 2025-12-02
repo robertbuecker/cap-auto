@@ -1,12 +1,20 @@
-# CAP Automation - Python Interface for CrysAlisPro Listen Mode
+# CAP Automation - Python Tools for CrysAlisPro
 
-A simple, robust Python wrapper for controlling Rigaku CrysAlisPro (CAP) via its listen mode interface. Designed for scientists familiar with CAP who want to automate workflows without deep Python expertise.
+A Python toolkit for working with Rigaku CrysAlisPro (CAP) data and automation:
+
+1. **CAP Listen Mode Interface** - Control CAP programmatically via listen mode
+2. **ROD Image Reader** - Read native `.rodhypix` detector image files without CAP
+
+Designed for scientists familiar with CAP who want to automate workflows and analyze data with Python.
 
 ## Features
 
-- **Simple API**: Clean, intuitive interface focused on common CAP operations
+### CAP Listen Mode Control (`CAPInstance`)
+
+- **Simple API**: Clean, intuitive interface for CAP automation
+- **Event-Driven Monitoring**: Native Windows file monitoring (zero polling overhead)
 - **Robust Logging**: Automatic capture and parsing of CAP log output
-- **Error Handling**: Customizable error/warning pattern matching with benign failure handling
+- **Error Handling**: Customizable error/warning pattern matching
 - **Three Execution Modes**:
   - `execute()`: Single command with full log capture
   - `execute_batch()`: Multiple commands with individual tracking  
@@ -15,22 +23,55 @@ A simple, robust Python wrapper for controlling Rigaku CrysAlisPro (CAP) via its
 - **Command History**: Complete history of executed commands and their results
 - **Context Manager Support**: Optional `with` statement usage for automatic cleanup
 
+### ROD Image Reader (`RODImageReader`)
+
+- **Native Format Support**: Read `.rodhypix` files directly (no CAP needed)
+- **Fast Decompression**: C++ acceleration (via dxtbx) or Numba JIT compilation
+- **Complete Metadata**: Access all image headers and experimental parameters
+- **NumPy Integration**: Returns images as standard NumPy arrays
+- **Pure Python Fallback**: Works even without C++ extensions
+
 ## Installation
 
 ```bash
-# Clone or copy the repository
+# Clone the repository
+git clone https://github.com/robertbuecker/cap-auto.git
 cd cap-auto
 
-# No dependencies beyond Python standard library
-python examples.py
+# No required dependencies for basic usage!
+# Optional: Install acceleration packages
+pip install numba  # For fast image decompression
 ```
 
 ## Quick Start
 
-### Basic Usage
+### Reading Detector Images
 
 ```python
-from cap_auto.cap_control_refactored import CAPInstance
+from cap_auto.rod_image_reader import read_rod_image, get_rod_info
+import matplotlib.pyplot as plt
+
+# Read image data
+image = read_rod_image("snapshot.rodhypix")
+print(f"Image shape: {image.shape}")
+print(f"Data range: {image.min()} to {image.max()}")
+
+# Display with percentile scaling
+vmin, vmax = np.percentile(image, [1, 99])
+plt.imshow(image, vmin=vmin, vmax=vmax, cmap='gray')
+plt.colorbar()
+plt.show()
+
+# Get metadata
+info = get_rod_info("snapshot.rodhypix")
+print(f"Exposure time: {info['exposure_time_sec']:.3f} s")
+print(f"Pixel size: {info['real_px_size_x']:.4f} mm")
+```
+
+### Controlling CAP
+
+```python
+from cap_auto.cap_control import CAPInstance
 
 # Create and start CAP instance
 cap = CAPInstance(start_now=True)
@@ -52,15 +93,80 @@ else:
 cap.stop()
 ```
 
-### Context Manager (Optional)
+### Example Notebooks
+
+Check out the `examples/` directory for Jupyter notebooks demonstrating:
+
+- **Image Visualization**: Display detector images and diffraction frames
+- **CAP Automation**: Run autoprocessing, refine lattice, execute AutoChem
+- **Data Analysis**: Extract and analyze diffraction data
+
+## ROD Image Reader
+
+### Basic Usage
 
 ```python
-# Automatic start/stop
+from cap_auto.rod_image_reader import RODImageReader
+import numpy as np
+
+# Create reader
+reader = RODImageReader("image.rodhypix")
+
+# Get image data
+image = reader.get_raw_data()
+
+# Access metadata
+print(f"Image shape: {reader.get_image_shape()}")
+print(f"Pixel size: {reader.get_pixel_size()} mm")
+print(f"Exposure: {reader.get_exposure_time()} s")
+
+# Check which decompression method is being used
+print(f"Using: {reader.get_decompression_method()}")  # C++, Numba, or Python
+```
+
+### Performance Notes
+
+The reader automatically selects the fastest available decompression:
+
+1. **C++ (fastest)**: If `dxtbx` is installed, but large extra dependency
+2. **Numba (fast)**: If `numba` is installed, almost as fast
+3. **Pure Python (fallback)**: Always available, but significantly slower
+
+Install optimization packages for best performance:
+```bash
+pip install numba              # JIT acceleration
+pip install dxtbx              # C++ acceleration (requires cctbx)
+```
+
+### Metadata Access
+
+```python
+# Get complete header information
+info = reader.get_header_info()
+
+# Access specific fields
+print(f"Wavelength: {info['alpha1_wavelength']} Å")
+print(f"Distance: {info['distance_mm']} mm")
+print(f"Detector type: {info['detector_type']}")
+print(f"Goniometer angles: {info['start_angles_steps']}")
+print(f"Gain: {info['gain']}")
+```
+
+## CAP Listen Mode Control
+
+### Basic Command Execution
+
+```python
+# Automatic start/stop with context manager
 with CAPInstance() as cap:
     result = cap.execute("dc proffit")
     print(f"Success: {result.success}")
 # CAP automatically stopped here
 ```
+
+### Event-Driven Monitoring
+
+The listen mode interface uses **native Windows file monitoring** (via `pywin32`'s `ReadDirectoryChangesW`) for instant response with zero CPU overhead.
 
 ### Multiple Commands
 
@@ -353,24 +459,6 @@ Common commands:
 - System: `xx sleep`, `xx listenmode`
 - Video: `dc sfs`, `dc dosf`, `dc efs`
 
-## Migrating from Old Code
-
-If you have code using the old `CAPControl` class:
-
-### Old code:
-```python
-cap_instance = CAPInstance(...)
-cap_control = CAPControl(work_folder, cap_instance)
-cap_control.run("dc proffit")
-```
-
-### New code:
-```python
-cap = CAPInstance(start_now=True)
-cap.execute("dc proffit")
-```
-
-The old `CAPControl` class is kept for backward compatibility but is deprecated.
 
 ## Troubleshooting
 
@@ -394,9 +482,27 @@ The old `CAPControl` class is kept for backward compatibility but is deprecated.
 - Verify port isn't already in use
 - Use `port=0` for automatic port selection
 
+### Image reader performance
+- Install `numba` for ~10x speedup: `pip install numba`
+- Install `dxtbx` for ~20-50x speedup (requires cctbx installation)
+
+## Requirements
+
+- **Python 3.8+**
+- **Windows** (for CAP control; image reader works on any platform)
+- **pywin32** (usually pre-installed on Windows Python)
+- **CrysAlisPro** (for CAP control; not needed for image reading)
+
+### Optional Dependencies
+
+- `numba` - Fast image decompression (recommended)
+- `dxtbx` - Fastest image decompression (C++ acceleration)
+- `matplotlib` - For image visualization in examples
+- `numpy` - For array operations (auto-installed with numba/matplotlib)
+
 ## Contributing
 
-This is a thin wrapper intentionally kept simple. When contributing:
+This toolkit is intentionally kept simple and focused. When contributing:
 
 - Keep it simple - avoid complex abstractions
 - Document for CAP users, not Python experts
@@ -405,12 +511,15 @@ This is a thin wrapper intentionally kept simple. When contributing:
 
 ## License
 
-[Your license here]
+BSD 3-Clause License. See LICENSE file for details.
 
 ## Author
 
-Robert Buecker
+Robert Bücker, robert.buecker@rigaku.com
 
 ## Acknowledgments
 
-Based on Rigaku CrysAlisPro listen mode interface (ITS 144).
+- Listen mode interface based on Rigaku CrysAlisPro documentation (ITS 144)
+- ROD image reader adapted from [dxtbx](https://github.com/cctbx/dxtbx) (BSD 3-Clause)
+  - Original authors: David Waterman, Takanori Nakane
+  - Copyright: 2018-2023 United Kingdom Research and Innovation & 2022-2023 Takanori Nakane
