@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cap-auto"
+version = "0.1.0"
+description = "Automation tools for Rigaku CrysAlisPro and native ROD image format reader"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "BSD-3-Clause"}
+authors = [
+    {name = "Robert Buecker", email = "robert.buecker@yahoo.com"}
+]
+keywords = ["crystallography", "crysalispro", "automation", "hypix", "rigaku", "microed"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
+
+dependencies = [
+    "numpy>=1.20.0",
+    "pywin32>=300; platform_system=='Windows'",
+]
+
+[project.optional-dependencies]
+numba = ["numba>=0.55.0"]
+viz = ["matplotlib>=3.3.0"]
+dev = [
+    "pytest>=7.0.0",
+    "black>=22.0.0",
+    "flake8>=4.0.0",
+]
+all = [
+    "cap-auto[numba,viz]",
+]
+
+[project.urls]
+Homepage = "https://github.com/robertbuecker/cap-auto"
+Repository = "https://github.com/robertbuecker/cap-auto"
+Issues = "https://github.com/robertbuecker/cap-auto/issues"
+
+[tool.setuptools]
+packages = ["cap_auto"]
+
+[tool.setuptools.package-data]
+cap_auto = ["py.typed"]

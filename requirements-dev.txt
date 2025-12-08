@@ -1,0 +1,13 @@
+# Development dependencies
+-r requirements.txt
+
+# Testing
+pytest>=7.0.0
+
+# Code quality
+black>=22.0.0
+flake8>=4.0.0
+
+# Optional dependencies for full development
+numba>=0.55.0
+matplotlib>=3.3.0

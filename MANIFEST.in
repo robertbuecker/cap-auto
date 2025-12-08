@@ -1,0 +1,7 @@
+include README.md
+include LICENSE
+include NATIVE_WINDOWS_MONITORING.md
+recursive-include example_data *.zip
+recursive-include examples *.ipynb *.md
+global-exclude __pycache__
+global-exclude *.py[co]
