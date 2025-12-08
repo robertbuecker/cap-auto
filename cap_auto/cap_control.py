@@ -268,6 +268,9 @@ class CAPInstance:
     making it easy to automate CAP workflows while keeping the interface simple
     for scientists who know CAP but may not be expert Python programmers.
     
+    For detailed examples and usage tutorials, see:
+    https://github.com/robertbuecker/cap-auto/tree/main/examples
+    
     Basic usage:
         # Create and start CAP instance
         cap = CAPInstance(start_now=True)

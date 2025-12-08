@@ -1,9 +1,11 @@
-"""
-Minimal Python module for reading Rigaku Oxford Diffraction image files.
+"""Minimal Python module for reading Rigaku Oxford Diffraction image files.
 
 This module extracts the core functionality from dxtbx's FormatROD class which can be
 found at:
 https://github.com/cctbx/dxtbx
+
+For usage examples and documentation, see:
+https://github.com/robertbuecker/cap-auto
 
 Original copyright and license information from dxtbx is retained below.
 Authors: David Waterman, Takanori Nakane
