@@ -527,6 +527,9 @@ class CAPInstance:
             self.cap_proc.wait(timeout=5)
         except:
             self.cap_proc.kill()
+        finally:
+            self._cleanup_command_files()
+            self._cleanup_macro_file()
         
         self._message_func('CAP stopped')
     
@@ -815,8 +818,9 @@ class CAPInstance:
         if not self.is_running():
             self.start()
         
-        # Write macro file
-        macro_path = self._command_file_path('mac')
+        # Write macro file outside the command.* namespace. execute() cleans up
+        # command.* before sending a command, which would delete command.mac.
+        macro_path = os.path.join(self.cmd_folder, 'cap_auto_macro.mac')
         with open(macro_path, 'w') as fh:
             fh.write('\n'.join(commands))
         
@@ -1100,6 +1104,13 @@ class CAPInstance:
                 os.remove(fn)
             except (FileNotFoundError, PermissionError):
                 pass
+
+    def _cleanup_macro_file(self):
+        """Remove temporary cap-auto macro files."""
+        try:
+            os.remove(os.path.join(self.cmd_folder, 'cap_auto_macro.mac'))
+        except (FileNotFoundError, PermissionError):
+            pass
     
     def _write_command(self, cmd: str):
         """Write command to command.in file."""

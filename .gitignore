@@ -75,3 +75,4 @@ tests/
 # Example data (keep only zip files)
 example_data/*
 !example_data/*.zip
+temp

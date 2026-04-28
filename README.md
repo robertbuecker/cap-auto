@@ -4,6 +4,7 @@ A Python toolkit for working with Rigaku CrysAlisPro (CAP) data and automation:
 
 1. **CAP Listen Mode Interface** - Control CAP programmatically via listen mode
 2. **ROD Image Reader** - Read native `.rodhypix` detector image files without CAP
+3. **File Parsing Utilities** - Parse CrysAlisPro output files (.tab, .dat, .xml, .csv) without CAP
 
 Designed for scientists familiar with CAP who want to automate workflows and analyze data with Python.
 
@@ -30,6 +31,17 @@ Designed for scientists familiar with CAP who want to automate workflows and ana
 - **Complete Metadata**: Access all image headers and experimental parameters
 - **NumPy Integration**: Returns images as standard NumPy arrays
 - **Pure Python Fallback**: Works even without C++ extensions
+
+### File Parsing Utilities (`cap_files`)
+
+- **CAP-Independent Parsing**: Read CrysAlisPro files without running CAP
+- **Reflection Tables**: Parse `.tab` files (from `WD OLDASCIIT` command)
+- **Powder Patterns**: Parse `.dat` files (from `POWDER RADIAL` command)
+- **Shell Statistics**: Automatic resolution shell analysis with auto-suggested boundaries
+- **XML Parameter Files**: Read and modify Proffit and Finalization XML settings
+- **Experiment Metadata**: Extract comprehensive metadata from experiments and CSV results
+- **Command Hints**: Parsing functions return CAP commands needed to generate missing files
+- **Pure Python**: Uses only standard library + NumPy (no pandas dependency)
 
 ## Installation
 
@@ -93,6 +105,24 @@ else:
 cap.stop()
 ```
 
+### Parsing CrysAlisPro Files
+
+```python
+from cap_auto.cap_files import parse_reflection_table, DiffractionData
+
+# Parse reflection table (no CAP needed)
+reflections, commands = parse_reflection_table("exp_11317.tab", wavelength=0.0251)
+print(f"Parsed {len(reflections)} reflections")
+
+# Analyze with automatic shell statistics
+diff_data = DiffractionData(reflections, [], wavelength=0.0251)
+shells = diff_data.compute_shell_statistics()  # Auto-suggested boundaries
+
+for shell in shells:
+    print(f"d: {shell['d_max']:.1f}-{shell['d_min']:.1f} Å, "
+          f"N_peaks: {shell['N_peaks']}, ratio: {shell['peak_ratio']:.3f}")
+```
+
 ### Example Notebooks
 
 Check out the `examples/` directory for Jupyter notebooks demonstrating:
@@ -100,6 +130,8 @@ Check out the `examples/` directory for Jupyter notebooks demonstrating:
 - **Image Visualization**: Display detector images and diffraction frames
 - **CAP Automation**: Run autoprocessing, refine lattice, execute AutoChem
 - **Data Analysis**: Extract and analyze diffraction data
+- **File Parsing**: Parse reflection tables, powder patterns, and compute shell statistics
+- **XML Modification**: Programmatically modify Proffit and Finalization parameters
 
 ## ROD Image Reader
 
@@ -150,6 +182,204 @@ print(f"Distance: {info['distance_mm']} mm")
 print(f"Detector type: {info['detector_type']}")
 print(f"Goniometer angles: {info['start_angles_steps']}")
 print(f"Gain: {info['gain']}")
+```
+
+## File Parsing Utilities
+
+Parse CrysAlisPro output files independently from CAP. All parsing functions work without a running CAP instance and return empty results with warnings for missing files.
+
+### Parse Reflection Tables
+
+```python
+from cap_auto.cap_files import parse_reflection_table
+
+# Parse reflection table (from WD OLDASCIIT command)
+reflections, commands = parse_reflection_table("exp_11317.tab", wavelength=0.0251)
+
+print(f"Parsed {len(reflections)} reflections")
+
+# Each reflection is a dict with fields:
+for refl in reflections[:3]:
+    print(f"d = {refl['d']:.2f} Å, I = {refl['I']:.1f}, inv_d = {refl['inv_d']:.3f}")
+
+# If file is missing, get CAP commands to generate it:
+if not reflections and commands:
+    print(f"File missing! Run these CAP commands:")
+    for cmd in commands:
+        print(f"  {cmd}")
+```
+
+### Parse Powder Patterns
+
+```python
+from cap_auto.cap_files import parse_powder_pattern
+
+# Parse powder pattern (from POWDER RADIAL command)
+powder, commands = parse_powder_pattern("radial.dat")
+
+print(f"Parsed {len(powder)} powder data points")
+
+# Each point is a dict with fields: two_theta, d_value, intensity, sigma, count, inv_d
+for point in powder[:3]:
+    print(f"2θ = {point['two_theta']:.2f}°, d = {point['d_value']:.2f} Å, "
+          f"I = {point['intensity']:.1f}")
+
+# Total integrated intensity
+total_intensity = sum(p['intensity'] for p in powder)
+print(f"Total intensity: {total_intensity:.1f}")
+```
+
+### Diffraction Data Analysis with Shell Statistics
+
+```python
+from cap_auto.cap_files import DiffractionData, parse_reflection_table, parse_powder_pattern
+
+# Load data
+reflections, _ = parse_reflection_table("exp.tab", wavelength=0.0251)
+powder, _ = parse_powder_pattern("radial.dat")
+
+# Create DiffractionData object
+diff_data = DiffractionData(reflections, powder, wavelength=0.0251)
+
+# Compute shell statistics with auto-suggested boundaries
+shells = diff_data.compute_shell_statistics()
+
+# Display results
+print(f"{'d_max':>8} {'d_min':>8} {'N_peaks':>8} {'I_peak':>12} {'I_tot':>12} {'ratio':>8}")
+print("-" * 70)
+for shell in shells:
+    d_max = shell['d_max'] if shell['d_max'] != float('inf') else 999.9
+    print(f"{d_max:8.2f} {shell['d_min']:8.2f} {shell['N_peaks']:8d} "
+          f"{shell['I_peak']:12.1f} {shell['I_tot']:12.1f} {shell['peak_ratio']:8.3f}")
+
+# Or specify custom shell boundaries (in 1/d, Å⁻¹)
+custom_boundaries = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5]
+shells_custom = diff_data.compute_shell_statistics(shell_boundaries=custom_boundaries)
+```
+
+### High-Level Diffraction Analysis
+
+```python
+from cap_auto.cap_files import get_diff_info
+
+# Parse without CAP (reads existing files)
+shells, reflections, powder, img_path = get_diff_info(
+    "exp_11317",
+    cap=None,  # No CAP instance needed
+    wavelength=0.0251,
+    keep_peak_file=True,
+    keep_powder_file=True
+)
+
+print(f"Analyzed {len(reflections)} reflections in {len(shells)} shells")
+print(f"Diffraction image: {img_path}")
+
+# Or generate files using CAP and then parse
+from cap_auto.cap_control import CAPInstance
+
+cap = CAPInstance(start_now=True)
+shells, reflections, powder, img_path = get_diff_info(
+    "exp_11317",
+    cap=cap,
+    redo_peak_hunt=True,  # Re-run peak hunting
+    wavelength=0.0251
+)
+cap.stop()
+```
+
+### Parse Experiment Metadata
+
+```python
+from cap_auto.cap_files import parse_cap_meta
+
+# Parse single experiment directory
+metadata = parse_cap_meta("exp_11317")
+exp = metadata[0]
+
+print(f"Name: {exp['name']}")
+print(f"R_int: {exp['r_int']}")
+print(f"Digest: {exp['digest']}")
+print(f"Diffraction image: {exp.get('diff-jpg', 'N/A')}")
+
+# Parse from Results Viewer CSV
+metadata_csv = parse_cap_meta("results.csv")
+print(f"Parsed {len(metadata_csv)} experiments from CSV")
+
+# Filter results
+good_data = [m for m in metadata_csv if m.get('r_int', 1.0) < 0.15]
+print(f"Found {len(good_data)} experiments with R_int < 15%")
+```
+
+### Modify XML Parameter Files
+
+```python
+from cap_auto.cap_files import ProffitXML, FinalizationXML
+
+# Proffit (data reduction) parameters
+proffit = ProffitXML("exp.xml", path="exp_dir", allow_missing=True)
+proffit.set_parameters(
+    template="template.xml",  # Use existing file as template
+    laue=5,                   # Laue group (4/m for tetragonal)
+    d_min=0.8,                # Resolution limits
+    d_max=50.0,
+    scan_width=1.5,           # Scan width in degrees
+    friedel_mates=True,       # Use Friedel mates
+    gral_mode=1,              # GRAL: 0=OFF, 1=AUTO, 2=MANUAL
+    autochem=False
+)
+# File is automatically saved
+
+# Finalization parameters
+finalizer = FinalizationXML("exp_finalizer.xml", path="exp_dir", allow_missing=True)
+finalizer.set_parameters(
+    template="template_finalizer.xml",
+    gral=True,
+    gral_interactive=False,
+    N_shells=15,
+    res_limit=0.7,
+    autochem=True,
+    laue=5,
+    z=4,
+    chem="C H N O"
+)
+```
+
+### Generate CAP Commands for Missing Files
+
+```python
+from cap_auto.cap_files import (
+    generate_powder_commands,
+    generate_reflection_commands,
+    generate_diff_image_commands
+)
+
+# Get commands to generate powder pattern
+powder_cmds = generate_powder_commands(
+    "exp_11317",
+    wavelength=0.0251,
+    d_min=0.3,
+    d_max=20.0,
+    recenter=True
+)
+
+# Get commands to generate reflection table
+refl_cmds = generate_reflection_commands(
+    "exp_11317",
+    redo_peak_hunt=True
+)
+
+# Get commands to generate diffraction image
+img_cmds = generate_diff_image_commands("exp_11317")
+
+# Execute with CAP
+from cap_auto.cap_control import CAPInstance
+cap = CAPInstance(start_now=True)
+
+for cmd in powder_cmds + refl_cmds + img_cmds:
+    result = cap.execute(cmd)
+    print(f"{'✓' if result.success else '✗'} {cmd}")
+
+cap.stop()
 ```
 
 ## CAP Listen Mode Control
@@ -495,10 +725,10 @@ Common commands:
 
 ### Optional Dependencies
 
+- `numpy` - Required for file parsing utilities; recommended for all data analysis
 - `numba` - Fast image decompression (recommended)
 - `dxtbx` - Fastest image decompression (C++ acceleration)
 - `matplotlib` - For image visualization in examples
-- `numpy` - For array operations (auto-installed with numba/matplotlib)
 
 ## Contributing
 
