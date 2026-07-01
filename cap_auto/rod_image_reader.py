@@ -33,6 +33,51 @@ try:
 except ImportError:
     HAS_NUMBA = False
 
+# Try to import the optional Cython backend
+try:
+    from . import ty6_cython as _ty6_cython
+    HAS_CYTHON = True
+except ImportError:
+    _ty6_cython = None
+    HAS_CYTHON = False
+
+
+_TY6_BACKEND_LABELS = {
+    "cpp": "C++",
+    "numba": "Numba",
+    "cython": "Cython",
+    "python": "Python",
+}
+
+
+def _normalize_ty6_backend(backend: str) -> str:
+    backend = backend.strip().lower()
+    if backend not in ("auto", "cpp", "numba", "cython", "python"):
+        raise ValueError(
+            "backend must be one of 'auto', 'cpp', 'numba', 'cython', or 'python'"
+        )
+    return backend
+
+
+def _resolve_ty6_backend(backend: str, use_cpp: bool, use_numba: bool) -> str:
+    backend = _normalize_ty6_backend(backend)
+
+    if backend == "auto":
+        if use_cpp and HAS_CPP_DECOMPRESSION:
+            return "cpp"
+        if use_numba and HAS_NUMBA:
+            return "numba"
+        return "python"
+
+    if backend == "cpp" and not HAS_CPP_DECOMPRESSION:
+        raise RuntimeError("C++ decompression backend is not available")
+    if backend == "numba" and not HAS_NUMBA:
+        raise RuntimeError("Numba backend is not available")
+    if backend == "cython" and not HAS_CYTHON:
+        raise RuntimeError("Cython backend is not available")
+
+    return backend
+
 
 # Numba-accelerated TY6 decompression functions
 if HAS_NUMBA:
@@ -218,7 +263,13 @@ class RODImageReader:
     pure Python decompression.
     """
     
-    def __init__(self, image_file: Union[str, os.PathLike], use_cpp: bool = True, use_numba: bool = True):
+    def __init__(
+        self,
+        image_file: Union[str, os.PathLike],
+        use_cpp: bool = True,
+        use_numba: bool = True,
+        backend: str = "auto",
+    ):
         """
         Initialize the reader with an image file.
         
@@ -226,10 +277,12 @@ class RODImageReader:
             image_file: Path to the .rodhypix file
             use_cpp: Use C++ decompression if available (default True)
             use_numba: Use Numba JIT decompression if available (default True, fallback from C++)
+            backend: Explicit TY6 backend to use ('auto', 'cpp', 'numba', 'cython', or 'python')
         """
         self.image_file = os.fspath(image_file)
-        self.use_cpp = use_cpp and HAS_CPP_DECOMPRESSION
-        self.use_numba = use_numba and HAS_NUMBA
+        self._ty6_backend = _resolve_ty6_backend(backend, use_cpp, use_numba)
+        self.use_cpp = self._ty6_backend == "cpp"
+        self.use_numba = self._ty6_backend == "numba"
         
         if not self.understand(self.image_file):
             raise ValueError(f"File {self.image_file} is not a valid ROD format")
@@ -436,10 +489,12 @@ class RODImageReader:
         assert self._txt_header is not None
         comp = self._txt_header["compression"].strip()
         if comp.startswith("TY6"):
-            if self.use_cpp:
+            if self._ty6_backend == "cpp":
                 return self._get_raw_data_ty6_cpp()
-            elif self.use_numba:
+            elif self._ty6_backend == "numba":
                 return self._get_raw_data_ty6_numba()
+            elif self._ty6_backend == "cython":
+                return self._get_raw_data_ty6_cython()
             else:
                 return self._get_raw_data_ty6_python()
         else:
@@ -597,20 +652,35 @@ class RODImageReader:
             offsets = np.frombuffer(offsets_raw, dtype=np.uint32)
 
             return _decode_ty6_image_numba(linedata, offsets, ny, nx)
-    
+
+    def _get_raw_data_ty6_cython(self) -> np.ndarray:
+        """Read TY6 compressed data using the optional Cython backend."""
+        if not HAS_CYTHON:
+            raise RuntimeError("Cython backend not available")
+
+        assert self._txt_header is not None
+        offset = self._txt_header["NHEADER"]
+        nx = self._txt_header["NX"]
+        ny = self._txt_header["NY"]
+
+        with open(self.image_file, "rb") as f:
+            f.seek(offset)
+            lbytesincompressedfield = struct.unpack("<l", f.read(4))[0]
+            linedata = np.fromfile(f, dtype=np.uint8, count=lbytesincompressedfield)
+            offsets_raw = f.read(4 * ny)
+            offsets = np.frombuffer(offsets_raw, dtype=np.uint32)
+
+            assert _ty6_cython is not None
+            return _ty6_cython.decode_ty6_image(linedata, offsets, ny, nx)
+
     def get_decompression_method(self) -> str:
         """
         Get the decompression method that will be used.
         
         Returns:
-            String indicating the decompression method: 'C++', 'Numba', or 'Python'
+            String indicating the decompression method: 'C++', 'Numba', 'Cython', or 'Python'
         """
-        if self.use_cpp:
-            return "C++"
-        elif self.use_numba:
-            return "Numba"
-        else:
-            return "Python"
+        return _TY6_BACKEND_LABELS[self._ty6_backend]
     
     def get_header_info(self) -> Dict:
         """
@@ -638,7 +708,8 @@ class RODImageReader:
 
 # Convenience functions
 def read_rod_image(filename: Union[str, os.PathLike], 
-                   use_cpp: bool = True, use_numba: bool = True) -> np.ndarray:
+                   use_cpp: bool = True, use_numba: bool = True,
+                   backend: str = "auto") -> np.ndarray:
     """
     Read a ROD image file and return the data as a NumPy array.
     
@@ -646,11 +717,17 @@ def read_rod_image(filename: Union[str, os.PathLike],
         filename: Path to the .rodhypix file
         use_cpp: Use C++ decompression if available (default True)
         use_numba: Use Numba JIT decompression if available (default True, fallback from C++)
+        backend: Explicit TY6 backend to use ('auto', 'cpp', 'numba', 'cython', or 'python')
         
     Returns:
         2D NumPy array with the image data
     """
-    reader = RODImageReader(filename, use_cpp=use_cpp, use_numba=use_numba)
+    reader = RODImageReader(
+        filename,
+        use_cpp=use_cpp,
+        use_numba=use_numba,
+        backend=backend,
+    )
     return reader.get_raw_data()
 
 

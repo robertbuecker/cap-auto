@@ -10,4 +10,5 @@ flake8>=4.0.0
 
 # Optional dependencies for full development
 numba>=0.55.0
+cython>=0.29.0
 matplotlib>=3.3.0

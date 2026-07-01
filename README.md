@@ -130,11 +130,13 @@ The reader automatically selects the fastest available decompression:
 
 1. **C++ (fastest)**: If `dxtbx` is installed, but large extra dependency
 2. **Numba (fast)**: If `numba` is installed, almost as fast
-3. **Pure Python (fallback)**: Always available, but significantly slower
+3. **Cython (experimental)**: Optional compiled TY6 backend for smaller deployments
+4. **Pure Python (fallback)**: Always available, but significantly slower
 
 Install optimization packages for best performance:
 ```bash
 pip install numba              # JIT acceleration
+pip install cython             # Optional compiled TY6 backend
 pip install dxtbx              # C++ acceleration (requires cctbx)
 ```
 
@@ -496,6 +498,7 @@ Common commands:
 ### Optional Dependencies
 
 - `numba` - Fast image decompression (recommended)
+- `cython` - Optional compiled TY6 backend for smaller deployments
 - `dxtbx` - Fastest image decompression (C++ acceleration)
 - `matplotlib` - For image visualization in examples
 - `numpy` - For array operations (auto-installed with numba/matplotlib)
