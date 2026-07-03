@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "BSD-3-Clause"}
 authors = [
-    {name = "Robert Buecker", email = "robert.buecker@yahoo.com"}
+    {name = "Robert Buecker", email = "robert.buecker@rigaku.com"}
 ]
 keywords = ["crystallography", "crysalispro", "automation", "hypix", "rigaku", "microed"]
 classifiers = [

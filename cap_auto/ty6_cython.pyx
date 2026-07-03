@@ -9,19 +9,19 @@
 import numpy as np
 cimport numpy as np
 
-from libc.stdint cimport int32_t, int64_t, uint32_t, uint64_t, uint8_t
+from libc.stdint cimport int32_t, int64_t, uint32_t, uint8_t
 
 np.import_array()
 
 
-cdef inline int32_t _read_signed_int16(const uint8_t[:] data, Py_ssize_t pos):
+cdef inline int32_t _read_signed_int16(const uint8_t[::1] data, Py_ssize_t pos):
     cdef uint32_t val = <uint32_t>data[pos] | (<uint32_t>data[pos + 1] << 8)
     if val >= 32768:
         val -= 65536
     return <int32_t>val
 
 
-cdef inline int32_t _read_signed_int32(const uint8_t[:] data, Py_ssize_t pos):
+cdef inline int32_t _read_signed_int32(const uint8_t[::1] data, Py_ssize_t pos):
     cdef int64_t val = <int64_t>data[pos]
     val |= <int64_t>data[pos + 1] << 8
     val |= <int64_t>data[pos + 2] << 16
@@ -31,16 +31,35 @@ cdef inline int32_t _read_signed_int32(const uint8_t[:] data, Py_ssize_t pos):
     return <int32_t>val
 
 
-cpdef np.ndarray decode_ty6_oneline(np.ndarray linedata, int w):
-    """
-    Decode a single TY6-compressed line.
-    """
-    cdef const uint8_t[:] data = linedata
-    cdef np.ndarray ret = np.zeros(w, dtype=np.int32)
-    cdef int32_t[:] out = ret
-    cdef Py_ssize_t ipos = 0
+cdef inline int32_t _extract_packed_value(
+    const uint8_t[::1] data,
+    Py_ssize_t packed_pos,
+    int nbit,
+    Py_ssize_t value_index,
+    int mask,
+):
+    cdef Py_ssize_t bit_offset = nbit * value_index
+    cdef Py_ssize_t byte_pos = packed_pos + (bit_offset >> 3)
+    cdef int shift = bit_offset & 7
+    cdef uint32_t acc = <uint32_t>data[byte_pos]
+
+    if nbit + shift > 8:
+        acc |= <uint32_t>data[byte_pos + 1] << 8
+    if nbit + shift > 16:
+        acc |= <uint32_t>data[byte_pos + 2] << 16
+
+    return <int32_t>((acc >> shift) & <uint32_t>mask)
+
+
+cdef void _decode_ty6_line_to_1d(
+    const uint8_t[::1] data,
+    Py_ssize_t line_start,
+    int w,
+    int32_t* out,
+):
+    cdef Py_ssize_t ipos = line_start
     cdef Py_ssize_t opos = 0
-    cdef Py_ssize_t i, j, k, block_start
+    cdef Py_ssize_t i, j, k, block_start, packed_pos
     cdef int blocksize = 8
     cdef int short_overflow = 254
     cdef int long_overflow = 255
@@ -51,13 +70,9 @@ cpdef np.ndarray decode_ty6_oneline(np.ndarray linedata, int w):
     cdef int bittype
     cdef int nbit1
     cdef int nbit2
-    cdef int nbit
     cdef int mask
-    cdef object v1
-    cdef object v2
     cdef int zero_at
     cdef int offset
-
     cdef Py_ssize_t nblock = (w - 1) // (blocksize * 2)
     cdef Py_ssize_t nrest = (w - 1) % (blocksize * 2)
 
@@ -82,29 +97,27 @@ cpdef np.ndarray decode_ty6_oneline(np.ndarray linedata, int w):
         zero_at = 0
         if nbit1 > 1:
             zero_at = (1 << (nbit1 - 1)) - 1
-
-        v1 = 0
-        for j in range(nbit1):
-            v1 |= int(data[ipos]) << (8 * j)
-            ipos += 1
-
         mask = (1 << nbit1) - 1
+        packed_pos = ipos
+        ipos += nbit1
         for j in range(blocksize):
-            out[opos] = (<int>((v1 >> (nbit1 * j)) & mask)) - zero_at
+            if nbit1 == 0:
+                out[opos] = 0
+            else:
+                out[opos] = _extract_packed_value(data, packed_pos, nbit1, j, mask) - zero_at
             opos += 1
 
         zero_at = 0
         if nbit2 > 1:
             zero_at = (1 << (nbit2 - 1)) - 1
-
-        v2 = 0
-        for j in range(nbit2):
-            v2 |= int(data[ipos]) << (8 * j)
-            ipos += 1
-
         mask = (1 << nbit2) - 1
+        packed_pos = ipos
+        ipos += nbit2
         for j in range(blocksize):
-            out[opos] = (<int>((v2 >> (nbit2 * j)) & mask)) - zero_at
+            if nbit2 == 0:
+                out[opos] = 0
+            else:
+                out[opos] = _extract_packed_value(data, packed_pos, nbit2, j, mask) - zero_at
             opos += 1
 
         block_start = opos - blocksize * 2
@@ -132,6 +145,15 @@ cpdef np.ndarray decode_ty6_oneline(np.ndarray linedata, int w):
             ipos += 2
         opos += 1
 
+
+cpdef np.ndarray decode_ty6_oneline(np.ndarray linedata, int w):
+    """
+    Decode a single TY6-compressed line.
+    """
+    cdef const uint8_t[::1] data = linedata
+    cdef np.ndarray ret = np.zeros(w, dtype=np.int32)
+    cdef int32_t[::1] out = ret
+    _decode_ty6_line_to_1d(data, 0, w, &out[0])
     return ret
 
 
@@ -140,15 +162,13 @@ cpdef np.ndarray decode_ty6_image(np.ndarray linedata, np.ndarray offsets, int n
     Decode a full TY6-compressed image.
     """
     cdef np.ndarray image = np.zeros((ny, nx), dtype=np.int32)
-    cdef const uint32_t[:] line_offsets = offsets
-    cdef Py_ssize_t iy, line_start, line_end
+    cdef int32_t[:, ::1] image_view = image
+    cdef const uint8_t[::1] data = linedata
+    cdef const uint32_t[::1] line_offsets = offsets
+    cdef Py_ssize_t iy, line_start
 
     for iy in range(ny):
         line_start = line_offsets[iy]
-        if iy < ny - 1:
-            line_end = line_offsets[iy + 1]
-            image[iy, :] = decode_ty6_oneline(linedata[line_start:line_end], nx)
-        else:
-            image[iy, :] = decode_ty6_oneline(linedata[line_start:], nx)
+        _decode_ty6_line_to_1d(data, line_start, nx, &image_view[iy, 0])
 
     return image
