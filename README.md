@@ -128,17 +128,12 @@ print(f"Using: {reader.get_decompression_method()}")  # C++, Numba, or Python
 
 The reader automatically selects the fastest available decompression:
 
-1. **C++ (fastest)**: If `dxtbx` is installed, but large extra dependency
-2. **Numba (fast)**: If `numba` is installed, almost as fast
-3. **Cython (experimental)**: Optional compiled TY6 backend for smaller deployments
+1. **C++ (fastest)**: Used if `dxtbx` is installed in your environment
+2. **Cython (fast)**: Compiled decompression backend. Install this package from wheels to get access without install-time compilation
+3. **Numba (fast)**: Available if `numba` is installed, almost as fast
 4. **Pure Python (fallback)**: Always available, but significantly slower
 
-Install optimization packages for best performance:
-```bash
-pip install numba              # JIT acceleration
-pip install cython             # Optional compiled TY6 backend
-pip install dxtbx              # C++ acceleration (requires cctbx)
-```
+**TODO: installation notes for backends**
 
 ### Metadata Access
 

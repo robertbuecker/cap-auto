@@ -43,7 +43,7 @@ except ImportError:
 
 
 _TY6_BACKEND_LABELS = {
-    "cpp": "C++",
+    "cpp": "C++/dxtbx",
     "numba": "Numba",
     "cython": "Cython",
     "python": "Python",
@@ -59,22 +59,24 @@ def _normalize_ty6_backend(backend: str) -> str:
     return backend
 
 
-def _resolve_ty6_backend(backend: str, use_cpp: bool, use_numba: bool) -> str:
+def _resolve_ty6_backend(backend: str, use_cpp: bool, use_cython: bool, use_numba: bool) -> str:
     backend = _normalize_ty6_backend(backend)
 
     if backend == "auto":
         if use_cpp and HAS_CPP_DECOMPRESSION:
             return "cpp"
+        if use_cython and HAS_CYTHON:
+            return "cython"
         if use_numba and HAS_NUMBA:
             return "numba"
         return "python"
 
     if backend == "cpp" and not HAS_CPP_DECOMPRESSION:
-        raise RuntimeError("C++ decompression backend is not available")
+        raise RuntimeError("C++ Decompression backend is not available. Install dxtbx or choose another backend.")
     if backend == "numba" and not HAS_NUMBA:
-        raise RuntimeError("Numba backend is not available")
+        raise RuntimeError("Numba backend is not available. Install numba or choose another backend.")
     if backend == "cython" and not HAS_CYTHON:
-        raise RuntimeError("Cython backend is not available")
+        raise RuntimeError("Cython backend is not available. Install cap-auto with Cython support (from wheel or source) or choose another backend.")
 
     return backend
 
@@ -267,6 +269,7 @@ class RODImageReader:
         self,
         image_file: Union[str, os.PathLike],
         use_cpp: bool = True,
+        use_cython: bool = True,
         use_numba: bool = True,
         backend: str = "auto",
     ):
@@ -280,8 +283,9 @@ class RODImageReader:
             backend: Explicit TY6 backend to use ('auto', 'cpp', 'numba', 'cython', or 'python')
         """
         self.image_file = os.fspath(image_file)
-        self._ty6_backend = _resolve_ty6_backend(backend, use_cpp, use_numba)
+        self._ty6_backend = _resolve_ty6_backend(backend, use_cpp, use_cython, use_numba)
         self.use_cpp = self._ty6_backend == "cpp"
+        self.use_cython = self._ty6_backend == "cython"
         self.use_numba = self._ty6_backend == "numba"
         
         if not self.understand(self.image_file):
@@ -501,9 +505,9 @@ class RODImageReader:
             raise NotImplementedError(f"Can't handle compression: {comp}")
     
     def _get_raw_data_ty6_cpp(self) -> np.ndarray:
-        """Read TY6 compressed data using C++ decompression."""
+        """Read TY6 compressed data using C++ decompression from dxtbx."""
         if not HAS_CPP_DECOMPRESSION:
-            raise RuntimeError("C++ decompression not available")
+            raise RuntimeError("C++ decompression not available. Install dxtbx or choose another backend.")
             
         assert self._txt_header is not None
         offset = self._txt_header["NHEADER"]
@@ -637,7 +641,7 @@ class RODImageReader:
     def _get_raw_data_ty6_numba(self) -> np.ndarray:
         """Read TY6 compressed data using Numba-accelerated Python decompression."""
         if not HAS_NUMBA:
-            raise RuntimeError("Numba not available")
+            raise RuntimeError("Numba not available. Install numba or choose another backend.")
             
         assert self._txt_header is not None
         offset = self._txt_header["NHEADER"]
@@ -656,7 +660,7 @@ class RODImageReader:
     def _get_raw_data_ty6_cython(self) -> np.ndarray:
         """Read TY6 compressed data using the optional Cython backend."""
         if not HAS_CYTHON:
-            raise RuntimeError("Cython backend not available")
+            raise RuntimeError("Cython backend not available. Install cap-auto with Cython support (from wheel or source) or choose another backend.")
 
         assert self._txt_header is not None
         offset = self._txt_header["NHEADER"]
@@ -678,7 +682,7 @@ class RODImageReader:
         Get the decompression method that will be used.
         
         Returns:
-            String indicating the decompression method: 'C++', 'Numba', 'Cython', or 'Python'
+            String indicating the decompression method: 'C++/dxtbx', 'Numba', 'Cython', or 'Python'
         """
         return _TY6_BACKEND_LABELS[self._ty6_backend]
     
@@ -708,15 +712,16 @@ class RODImageReader:
 
 # Convenience functions
 def read_rod_image(filename: Union[str, os.PathLike], 
-                   use_cpp: bool = True, use_numba: bool = True,
-                   backend: str = "auto") -> np.ndarray:
+                   use_cpp: bool = True, use_cython: bool = True, 
+                   use_numba: bool = True, backend: str = "auto") -> np.ndarray:
     """
     Read a ROD image file and return the data as a NumPy array.
     
     Args:
         filename: Path to the .rodhypix file
         use_cpp: Use C++ decompression if available (default True)
-        use_numba: Use Numba JIT decompression if available (default True, fallback from C++)
+        use_cython: Use Cython decompression if available (default True)
+        use_numba: Use Numba JIT decompression if available (default True)
         backend: Explicit TY6 backend to use ('auto', 'cpp', 'numba', 'cython', or 'python')
         
     Returns:
@@ -725,6 +730,7 @@ def read_rod_image(filename: Union[str, os.PathLike],
     reader = RODImageReader(
         filename,
         use_cpp=use_cpp,
+        use_cython=use_cython,
         use_numba=use_numba,
         backend=backend,
     )
