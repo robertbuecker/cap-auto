@@ -6,11 +6,11 @@ This directory contains Jupyter notebooks demonstrating the `cap-auto` package f
 
 - **Python 3.8+** with `numpy` installed
 - **CrysAlisPro** (for CAP automation notebook only)
-- **Optional:** `matplotlib` for visualization, `numba` for fast image reading
+- **Optional:** `matplotlib` for visualization
 
 Install optional dependencies:
 ```bash
-pip install matplotlib numba
+pip install matplotlib
 ```
 
 ## Notebooks
@@ -106,8 +106,7 @@ The notebooks will automatically:
 - Increase startup timeout in notebook
 
 ### "Image decompression slow"
-- Install `numba` for ~10x speedup: `pip install numba`
-- Install `dxtbx` for ~50x speedup (requires cctbx)
+- Install a binary `cap-auto` wheel for the packaged native C++ TY6 backend
 
 ### "Module not found"
 - Install `cap-auto` in development mode:

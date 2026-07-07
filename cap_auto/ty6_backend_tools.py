@@ -9,7 +9,7 @@ from typing import Dict, List, Sequence, Union
 
 import numpy as np
 
-from .rod_image_reader import HAS_CYTHON, HAS_NATIVE_CPP, read_rod_image
+from .rod_image_reader import HAS_NATIVE_CPP, read_rod_image
 
 
 def list_ty6_frames(root: Union[Path, str], limit: Union[int, None] = None) -> List[Path]:
@@ -42,7 +42,7 @@ def list_ty6_frames(root: Union[Path, str], limit: Union[int, None] = None) -> L
 
 def read_backend_frame(path: Union[Path, str], backend: str) -> np.ndarray:
     """Read a single frame with an explicit TY6 backend."""
-    return read_rod_image(path, use_cpp=False, use_numba=False, backend=backend)
+    return read_rod_image(path, use_native=True, backend=backend)
 
 
 def decode_frames(paths: Sequence[Union[Path, str]], backend: str) -> Dict[str, np.ndarray]:
@@ -96,8 +96,6 @@ def benchmark_backends(
     timings: Dict[str, Dict[str, float]] = {}
 
     for backend in backends:
-        if backend == "cython" and not HAS_CYTHON:
-            raise RuntimeError("Cython backend is not available")
         if backend == "native" and not HAS_NATIVE_CPP:
             raise RuntimeError("Native C++ backend is not available")
 

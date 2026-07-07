@@ -19,28 +19,6 @@ import struct
 import numpy as np
 from typing import Dict, Tuple, Union, Optional
 
-# Try to import the C++ decompression function from dxtbx if available
-try:
-    from dxtbx.ext import uncompress_rod_TY6 # pyright: ignore[reportMissingImports]
-    HAS_CPP_DECOMPRESSION = True
-except ImportError:
-    HAS_CPP_DECOMPRESSION = False
-
-# Try to import Numba for JIT acceleration
-try:
-    from numba import jit
-    HAS_NUMBA = True
-except ImportError:
-    HAS_NUMBA = False
-
-# Try to import the optional Cython backend
-try:
-    from . import ty6_cython as _ty6_cython
-    HAS_CYTHON = True
-except ImportError:
-    _ty6_cython = None
-    HAS_CYTHON = False
-
 # Try to import the optional standalone C++/NumPy backend
 try:
     from . import ty6_cpp as _ty6_cpp
@@ -51,222 +29,32 @@ except ImportError:
 
 
 _TY6_BACKEND_LABELS = {
-    "cpp": "C++/dxtbx",
     "native": "C++/NumPy",
-    "numba": "Numba",
-    "cython": "Cython",
     "python": "Python",
 }
 
 
 def _normalize_ty6_backend(backend: str) -> str:
     backend = backend.strip().lower()
-    if backend not in ("auto", "cpp", "native", "numba", "cython", "python"):
+    if backend not in ("auto", "native", "python"):
         raise ValueError(
-            "backend must be one of 'auto', 'cpp', 'native', 'numba', 'cython', or 'python'"
+            "backend must be one of 'auto', 'native', or 'python'"
         )
     return backend
 
 
-def _resolve_ty6_backend(backend: str, use_cpp: bool, use_cython: bool, use_numba: bool) -> str:
+def _resolve_ty6_backend(backend: str, use_native: bool) -> str:
     backend = _normalize_ty6_backend(backend)
 
     if backend == "auto":
-        if use_cpp and HAS_CPP_DECOMPRESSION:
-            return "cpp"
-        if use_cython and HAS_NATIVE_CPP:
+        if use_native and HAS_NATIVE_CPP:
             return "native"
-        if use_cython and HAS_CYTHON:
-            return "cython"
-        if use_numba and HAS_NUMBA:
-            return "numba"
         return "python"
 
-    if backend == "cpp" and not HAS_CPP_DECOMPRESSION:
-        raise RuntimeError("C++ Decompression backend is not available. Install dxtbx or choose another backend.")
     if backend == "native" and not HAS_NATIVE_CPP:
         raise RuntimeError("Native C++ backend is not available. Install cap-auto from a binary wheel or choose another backend.")
-    if backend == "numba" and not HAS_NUMBA:
-        raise RuntimeError("Numba backend is not available. Install numba or choose another backend.")
-    if backend == "cython" and not HAS_CYTHON:
-        raise RuntimeError("Cython backend is not available. Install cap-auto with Cython support (from wheel or source) or choose another backend.")
 
     return backend
-
-
-# Numba-accelerated TY6 decompression functions
-if HAS_NUMBA:
-    @jit(nopython=True, cache=True) # pyright: ignore[reportPossiblyUnboundVariable]
-    def _decode_ty6_oneline_numba(linedata: np.ndarray, w: int) -> np.ndarray:
-        """
-        Numba JIT-compiled version of TY6 line decompression.
-        
-        Args:
-            linedata: Raw line data as uint8 array
-            w: Number of pixels in the fast axis
-            
-        Returns:
-            Decompressed pixel values for the line
-        """
-        BLOCKSIZE = 8
-        SHORT_OVERFLOW = 254
-        LONG_OVERFLOW = 255
-        SHORT_OVERFLOW_SIGNED = SHORT_OVERFLOW - 127
-        LONG_OVERFLOW_SIGNED = LONG_OVERFLOW - 127
-
-        ipos = 0
-        opos = 0
-        ret = np.zeros(w, dtype=np.int32)
-
-        nblock = (w - 1) // (BLOCKSIZE * 2)
-        nrest = (w - 1) % (BLOCKSIZE * 2)
-
-        # Decode first pixel
-        firstpx = int(linedata[ipos])
-        ipos += 1
-        if firstpx < SHORT_OVERFLOW:
-            ret[opos] = firstpx - 127
-        elif firstpx == LONG_OVERFLOW:
-            # Manually reconstruct int32 from bytes
-            ret[opos] = (linedata[ipos] | 
-                        (linedata[ipos + 1] << 8) | 
-                        (linedata[ipos + 2] << 16) | 
-                        (linedata[ipos + 3] << 24))
-            # Handle signed integer overflow
-            if ret[opos] >= 2147483648:
-                ret[opos] -= 4294967296
-            ipos += 4
-        else:
-            # Manually reconstruct int16 from bytes
-            val = linedata[ipos] | (linedata[ipos + 1] << 8)
-            # Handle signed integer overflow for int16
-            if val >= 32768:
-                val -= 65536
-            ret[opos] = val
-            ipos += 2
-        opos += 1
-
-        # Decode blocks
-        for k in range(nblock):
-            bittype = int(linedata[ipos])
-            nbit1 = bittype & 15
-            nbit2 = (bittype >> 4) & 15
-            ipos += 1
-
-            # Process first sub-block
-            zero_at1 = 0
-            if nbit1 > 1:
-                zero_at1 = (1 << (nbit1 - 1)) - 1
-
-            v1 = 0
-            for j in range(nbit1):
-                v1 |= int(linedata[ipos]) << (8 * j)
-                ipos += 1
-
-            mask1 = (1 << nbit1) - 1
-            for j in range(BLOCKSIZE):
-                val = ((v1 >> (nbit1 * j)) & mask1) - zero_at1
-                ret[opos] = np.int32(val)
-                opos += 1
-
-            # Process second sub-block
-            zero_at2 = 0
-            if nbit2 > 1:
-                zero_at2 = (1 << (nbit2 - 1)) - 1
-
-            v2 = 0
-            for j in range(nbit2):
-                v2 |= int(linedata[ipos]) << (8 * j)
-                ipos += 1
-
-            mask2 = (1 << nbit2) - 1
-            for j in range(BLOCKSIZE):
-                val = ((v2 >> (nbit2 * j)) & mask2) - zero_at2
-                ret[opos] = np.int32(val)
-                opos += 1
-
-            # Apply delta encoding to the entire block
-            block_start = opos - BLOCKSIZE * 2
-            for i in range(block_start, opos):
-                offset = ret[i]
-
-                if offset >= SHORT_OVERFLOW_SIGNED:
-                    if offset >= LONG_OVERFLOW_SIGNED:
-                        # Manually reconstruct int32 from bytes
-                        offset_val = (linedata[ipos] | 
-                                    (linedata[ipos + 1] << 8) | 
-                                    (linedata[ipos + 2] << 16) | 
-                                    (linedata[ipos + 3] << 24))
-                        # Handle signed integer overflow
-                        if offset_val >= 2147483648:
-                            offset_val -= 4294967296
-                        offset = offset_val
-                        ipos += 4
-                    else:
-                        # Manually reconstruct int16 from bytes
-                        val = linedata[ipos] | (linedata[ipos + 1] << 8)
-                        # Handle signed integer overflow for int16
-                        if val >= 32768:
-                            val -= 65536
-                        offset = val
-                        ipos += 2
-
-                ret[i] = ret[i - 1] + offset
-
-        # Decode remaining pixels
-        for i in range(nrest):
-            px = int(linedata[ipos])
-            ipos += 1
-            if px < SHORT_OVERFLOW:
-                ret[opos] = ret[opos - 1] + px - 127
-            elif px == LONG_OVERFLOW:
-                # Manually reconstruct int32 from bytes
-                val = (linedata[ipos] | 
-                      (linedata[ipos + 1] << 8) | 
-                      (linedata[ipos + 2] << 16) | 
-                      (linedata[ipos + 3] << 24))
-                # Handle signed integer overflow
-                if val >= 2147483648:
-                    val -= 4294967296
-                ret[opos] = ret[opos - 1] + val
-                ipos += 4
-            else:
-                # Manually reconstruct int16 from bytes
-                val = linedata[ipos] | (linedata[ipos + 1] << 8)
-                # Handle signed integer overflow for int16
-                if val >= 32768:
-                    val -= 65536
-                ret[opos] = ret[opos - 1] + val
-                ipos += 2
-            opos += 1
-
-        return ret
-
-    @jit(nopython=True, cache=True) # pyright: ignore[reportPossiblyUnboundVariable]
-    def _decode_ty6_image_numba(linedata: np.ndarray, offsets: np.ndarray, 
-                               ny: int, nx: int) -> np.ndarray:
-        """
-        Numba JIT-compiled version of full TY6 image decompression.
-        
-        Args:
-            linedata: Raw compressed data as uint8 array
-            offsets: Line offset positions as uint32 array
-            ny: Number of lines (height)
-            nx: Number of pixels per line (width)
-            
-        Returns:
-            Decompressed image as 2D int32 array
-        """
-        image = np.zeros((ny, nx), dtype=np.int32)
-        for iy in range(ny):
-            line_start = offsets[iy]
-            if iy < ny - 1:
-                line_end = offsets[iy + 1]
-                line_slice = linedata[line_start:line_end]
-            else:
-                line_slice = linedata[line_start:]
-            image[iy, :] = _decode_ty6_oneline_numba(line_slice, nx)
-        return image
 
 
 class RODImageReader:
@@ -274,16 +62,13 @@ class RODImageReader:
     Minimal reader for Rigaku Oxford Diffraction image files.
     
     This class can read .rodhypix files and return the image data as NumPy arrays.
-    It supports both C++ accelerated decompression (if dxtbx is available) and
-    pure Python decompression.
+    It supports packaged native C++ decompression and pure Python decompression.
     """
     
     def __init__(
         self,
         image_file: Union[str, os.PathLike],
-        use_cpp: bool = True,
-        use_cython: bool = True,
-        use_numba: bool = True,
+        use_native: bool = True,
         backend: str = "auto",
     ):
         """
@@ -291,16 +76,12 @@ class RODImageReader:
         
         Args:
             image_file: Path to the .rodhypix file
-            use_cpp: Use C++ decompression if available (default True)
-            use_numba: Use Numba JIT decompression if available (default True, fallback from C++)
-            backend: Explicit TY6 backend to use ('auto', 'cpp', 'native', 'numba', 'cython', or 'python')
+            use_native: Use packaged C++/NumPy decompression if available (default True)
+            backend: Explicit TY6 backend to use ('auto', 'native', or 'python')
         """
         self.image_file = os.fspath(image_file)
-        self._ty6_backend = _resolve_ty6_backend(backend, use_cpp, use_cython, use_numba)
-        self.use_cpp = self._ty6_backend == "cpp"
+        self._ty6_backend = _resolve_ty6_backend(backend, use_native)
         self.use_native = self._ty6_backend == "native"
-        self.use_cython = self._ty6_backend == "cython"
-        self.use_numba = self._ty6_backend == "numba"
         
         if not self.understand(self.image_file):
             raise ValueError(f"File {self.image_file} is not a valid ROD format")
@@ -507,40 +288,13 @@ class RODImageReader:
         assert self._txt_header is not None
         comp = self._txt_header["compression"].strip()
         if comp.startswith("TY6"):
-            if self._ty6_backend == "cpp":
-                return self._get_raw_data_ty6_cpp()
-            elif self._ty6_backend == "native":
+            if self._ty6_backend == "native":
                 return self._get_raw_data_ty6_native()
-            elif self._ty6_backend == "numba":
-                return self._get_raw_data_ty6_numba()
-            elif self._ty6_backend == "cython":
-                return self._get_raw_data_ty6_cython()
             else:
                 return self._get_raw_data_ty6_python()
         else:
             raise NotImplementedError(f"Can't handle compression: {comp}")
-    
-    def _get_raw_data_ty6_cpp(self) -> np.ndarray:
-        """Read TY6 compressed data using C++ decompression from dxtbx."""
-        if not HAS_CPP_DECOMPRESSION:
-            raise RuntimeError("C++ decompression not available. Install dxtbx or choose another backend.")
-            
-        assert self._txt_header is not None
-        offset = self._txt_header["NHEADER"]
-        nx = self._txt_header["NX"]
-        ny = self._txt_header["NY"]
-        
-        with open(self.image_file, "rb") as f:
-            f.seek(offset)
-            lbytesincompressedfield = struct.unpack("<l", f.read(4))[0]
-            linedata = f.read(lbytesincompressedfield)
-            offsets = f.read(4 * ny)
 
-            # Import flex here to avoid issues if not available
-            from scitbx.array_family import flex # pyright: ignore[reportMissingImports]
-            flex_result = uncompress_rod_TY6(linedata, offsets, ny, nx)  # type: ignore
-            return flex_result.as_numpy_array()
-    
     def _get_raw_data_ty6_python(self) -> np.ndarray:
         """Read TY6 compressed data using pure Python decompression."""
         assert self._txt_header is not None
@@ -654,45 +408,6 @@ class RODImageReader:
 
         return ret
     
-    def _get_raw_data_ty6_numba(self) -> np.ndarray:
-        """Read TY6 compressed data using Numba-accelerated Python decompression."""
-        if not HAS_NUMBA:
-            raise RuntimeError("Numba not available. Install numba or choose another backend.")
-            
-        assert self._txt_header is not None
-        offset = self._txt_header["NHEADER"]
-        nx = self._txt_header["NX"]
-        ny = self._txt_header["NY"]
-        
-        with open(self.image_file, "rb") as f:
-            f.seek(offset)
-            lbytesincompressedfield = struct.unpack("<l", f.read(4))[0]
-            linedata = np.fromfile(f, dtype=np.uint8, count=lbytesincompressedfield)
-            offsets_raw = f.read(4 * ny)
-            offsets = np.frombuffer(offsets_raw, dtype=np.uint32)
-
-            return _decode_ty6_image_numba(linedata, offsets, ny, nx)
-
-    def _get_raw_data_ty6_cython(self) -> np.ndarray:
-        """Read TY6 compressed data using the optional Cython backend."""
-        if not HAS_CYTHON:
-            raise RuntimeError("Cython backend not available. Install cap-auto with Cython support (from wheel or source) or choose another backend.")
-
-        assert self._txt_header is not None
-        offset = self._txt_header["NHEADER"]
-        nx = self._txt_header["NX"]
-        ny = self._txt_header["NY"]
-
-        with open(self.image_file, "rb") as f:
-            f.seek(offset)
-            lbytesincompressedfield = struct.unpack("<l", f.read(4))[0]
-            linedata = np.fromfile(f, dtype=np.uint8, count=lbytesincompressedfield)
-            offsets_raw = f.read(4 * ny)
-            offsets = np.frombuffer(offsets_raw, dtype=np.uint32)
-
-            assert _ty6_cython is not None
-            return _ty6_cython.decode_ty6_image(linedata, offsets, ny, nx)
-
     def _get_raw_data_ty6_native(self) -> np.ndarray:
         """Read TY6 compressed data using the optional standalone C++ backend."""
         if not HAS_NATIVE_CPP:
@@ -718,7 +433,7 @@ class RODImageReader:
         Get the decompression method that will be used.
         
         Returns:
-            String indicating the decompression method: 'C++/dxtbx', 'Numba', 'Cython', or 'Python'
+            String indicating the decompression method: 'C++/NumPy' or 'Python'
         """
         return _TY6_BACKEND_LABELS[self._ty6_backend]
     
@@ -747,27 +462,23 @@ class RODImageReader:
 
 
 # Convenience functions
-def read_rod_image(filename: Union[str, os.PathLike], 
-                   use_cpp: bool = True, use_cython: bool = True, 
-                   use_numba: bool = True, backend: str = "auto") -> np.ndarray:
+def read_rod_image(filename: Union[str, os.PathLike],
+                   use_native: bool = True,
+                   backend: str = "auto") -> np.ndarray:
     """
     Read a ROD image file and return the data as a NumPy array.
     
     Args:
         filename: Path to the .rodhypix file
-        use_cpp: Use C++ decompression if available (default True)
-        use_cython: Use Cython decompression if available (default True)
-        use_numba: Use Numba JIT decompression if available (default True)
-        backend: Explicit TY6 backend to use ('auto', 'cpp', 'native', 'numba', 'cython', or 'python')
+        use_native: Use packaged C++/NumPy decompression if available (default True)
+        backend: Explicit TY6 backend to use ('auto', 'native', or 'python')
         
     Returns:
         2D NumPy array with the image data
     """
     reader = RODImageReader(
         filename,
-        use_cpp=use_cpp,
-        use_cython=use_cython,
-        use_numba=use_numba,
+        use_native=use_native,
         backend=backend,
     )
     return reader.get_raw_data()
@@ -797,7 +508,6 @@ if __name__ == "__main__":
     filename = sys.argv[1]
     
     try:
-        # Try with C++ decompression first
         print(f"Reading {filename}...")
         reader = RODImageReader(filename)
         
@@ -806,7 +516,7 @@ if __name__ == "__main__":
         for key, value in info.items():
             print(f"  {key}: {value}")
         
-        print(f"\nDecompression method: {'C++' if reader.use_cpp else 'Python'}")
+        print(f"\nDecompression method: {reader.get_decompression_method()}")
         
         data = reader.get_raw_data()
         print(f"Image shape: {data.shape}")
