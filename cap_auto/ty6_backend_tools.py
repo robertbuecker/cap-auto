@@ -9,7 +9,7 @@ from typing import Dict, List, Sequence, Union
 
 import numpy as np
 
-from .rod_image_reader import HAS_CYTHON, read_rod_image
+from .rod_image_reader import HAS_CYTHON, HAS_NATIVE_CPP, read_rod_image
 
 
 def list_ty6_frames(root: Union[Path, str], limit: Union[int, None] = None) -> List[Path]:
@@ -98,6 +98,8 @@ def benchmark_backends(
     for backend in backends:
         if backend == "cython" and not HAS_CYTHON:
             raise RuntimeError("Cython backend is not available")
+        if backend == "native" and not HAS_NATIVE_CPP:
+            raise RuntimeError("Native C++ backend is not available")
 
         for _ in range(warmup_runs):
             for path in paths:

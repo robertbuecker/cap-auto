@@ -13,12 +13,22 @@ import numpy as np
 extensions = []
 ty6_pyx = Path("cap_auto") / "ty6_cython.pyx"
 ty6_c = Path("cap_auto") / "ty6_cython.c"
+ty6_cpp = Path("cap_auto") / "ty6_cpp.cpp"
 if ty6_pyx.exists():
     extensions.append(
         Extension(
             "cap_auto.ty6_cython",
             [str(ty6_c)],
             include_dirs=[np.get_include()],
+        )
+    )
+if ty6_cpp.exists():
+    extensions.append(
+        Extension(
+            "cap_auto.ty6_cpp",
+            [str(ty6_cpp)],
+            include_dirs=[np.get_include()],
+            language="c++",
         )
     )
 

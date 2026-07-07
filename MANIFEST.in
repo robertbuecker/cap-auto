@@ -1,6 +1,7 @@
 include README.md
 include LICENSE
 include NATIVE_WINDOWS_MONITORING.md
+include cap_auto/*.cpp
 include cap_auto/*.pyx
 include scripts/*.py
 global-exclude __pycache__

@@ -11,7 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from cap_auto.rod_image_reader import HAS_CYTHON  # noqa: E402
+from cap_auto.rod_image_reader import HAS_CYTHON, HAS_NATIVE_CPP  # noqa: E402
 from cap_auto.ty6_backend_tools import (  # noqa: E402
     assert_backend_equivalence,
     benchmark_backends,
@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--backends",
         nargs="+",
-        default=["python", "numba", "cython"],
+        default=["python", "numba", "cython", "native"],
         help="Backends to benchmark",
     )
     return parser.parse_args()
@@ -62,6 +62,8 @@ def main() -> int:
 
     if "cython" in args.backends and not HAS_CYTHON:
         raise RuntimeError("Cython backend is not available")
+    if "native" in args.backends and not HAS_NATIVE_CPP:
+        raise RuntimeError("Native C++ backend is not available")
 
     print(f"Selected {len(frames)} frames from {args.root}")
     for frame in frames:
