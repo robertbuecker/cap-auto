@@ -3,7 +3,7 @@
 ## Basic Usage
 
 ```python
-from cap_auto.cap_control_refactored import CAPInstance
+from cap_auto.cap_control import CAPInstance
 
 # Start CAP
 cap = CAPInstance(start_now=True)

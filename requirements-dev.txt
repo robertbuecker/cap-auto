@@ -7,6 +7,3 @@ pytest>=7.0.0
 # Code quality
 black>=22.0.0
 flake8>=4.0.0
-
-# Optional dependencies for full development
-matplotlib>=3.3.0

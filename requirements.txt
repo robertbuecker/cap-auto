@@ -1,3 +1,2 @@
 # Core dependencies
-numpy>=1.20.0
 pywin32>=300; platform_system=="Windows"

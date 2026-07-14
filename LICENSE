@@ -2,10 +2,6 @@ BSD 3-Clause License
 
 Copyright (c) 2025, Robert Buecker
 
-Portions of this software (rod_image_reader.py) are adapted from dxtbx:
-Copyright (c) 2018-2023, United Kingdom Research and Innovation
-Copyright (c) 2022-2023, Takanori Nakane
-
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:
 
