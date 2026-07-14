@@ -5,6 +5,8 @@ __pycache__/
 
 # C extensions
 *.so
+*.pyd
+cap_auto/ty6_cython.c
 
 # Distribution / packaging
 .Python
@@ -75,3 +77,4 @@ tests/
 # Example data (keep only zip files)
 example_data/*
 !example_data/*.zip
+temp

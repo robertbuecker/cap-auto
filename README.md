@@ -26,7 +26,7 @@ Designed for scientists familiar with CAP who want to automate workflows and ana
 ### ROD Image Reader (`RODImageReader`)
 
 - **Native Format Support**: Read `.rodhypix` files directly (no CAP needed)
-- **Fast Decompression**: C++ acceleration (via dxtbx) or Numba JIT compilation
+- **Fast Decompression**: Packaged native C++ TY6 backend
 - **Complete Metadata**: Access all image headers and experimental parameters
 - **NumPy Integration**: Returns images as standard NumPy arrays
 - **Pure Python Fallback**: Works even without C++ extensions
@@ -38,9 +38,8 @@ Designed for scientists familiar with CAP who want to automate workflows and ana
 git clone https://github.com/robertbuecker/cap-auto.git
 cd cap-auto
 
-# No required dependencies for basic usage!
-# Optional: Install acceleration packages
-pip install numba  # For fast image decompression
+# No required dependencies for basic usage beyond the package install.
+# Binary wheels include the packaged native TY6 backend when available.
 ```
 
 ## Quick Start
@@ -121,22 +120,15 @@ print(f"Pixel size: {reader.get_pixel_size()} mm")
 print(f"Exposure: {reader.get_exposure_time()} s")
 
 # Check which decompression method is being used
-print(f"Using: {reader.get_decompression_method()}")  # C++, Numba, or Python
+print(f"Using: {reader.get_decompression_method()}")  # C++/NumPy or Python
 ```
 
 ### Performance Notes
 
 The reader automatically selects the fastest available decompression:
 
-1. **C++ (fastest)**: If `dxtbx` is installed, but large extra dependency
-2. **Numba (fast)**: If `numba` is installed, almost as fast
-3. **Pure Python (fallback)**: Always available, but significantly slower
-
-Install optimization packages for best performance:
-```bash
-pip install numba              # JIT acceleration
-pip install dxtbx              # C++ acceleration (requires cctbx)
-```
+1. **C++/NumPy native backend (fast)**: Built into binary wheels for supported platforms
+2. **Pure Python fallback**: Always available, but significantly slower
 
 ### Metadata Access
 
@@ -483,8 +475,7 @@ Common commands:
 - Use `port=0` for automatic port selection
 
 ### Image reader performance
-- Install `numba` for ~10x speedup: `pip install numba`
-- Install `dxtbx` for ~20-50x speedup (requires cctbx installation)
+- Install a binary `cap-auto` wheel for the packaged native C++ TY6 backend
 
 ## Requirements
 
@@ -495,10 +486,8 @@ Common commands:
 
 ### Optional Dependencies
 
-- `numba` - Fast image decompression (recommended)
-- `dxtbx` - Fastest image decompression (C++ acceleration)
 - `matplotlib` - For image visualization in examples
-- `numpy` - For array operations (auto-installed with numba/matplotlib)
+- `numpy` - For array operations
 
 ## Contributing
 

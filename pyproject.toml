@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=61.0", "wheel", "numpy>=1.20.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "BSD-3-Clause"}
 authors = [
-    {name = "Robert Buecker", email = "robert.buecker@yahoo.com"}
+    {name = "Robert Buecker", email = "robert.buecker@rigaku.com"}
 ]
 keywords = ["crystallography", "crysalispro", "automation", "hypix", "rigaku", "microed"]
 classifiers = [
@@ -24,6 +24,8 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Chemistry",
 ]
 
@@ -33,7 +35,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-numba = ["numba>=0.55.0"]
 viz = ["matplotlib>=3.3.0"]
 dev = [
     "pytest>=7.0.0",
@@ -41,7 +42,7 @@ dev = [
     "flake8>=4.0.0",
 ]
 all = [
-    "cap-auto[numba,viz]",
+    "cap-auto[viz]",
 ]
 
 [project.urls]
